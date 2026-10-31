@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -20,6 +21,7 @@ func renderTranscript(evs []Event, n int) string {
 		cur, curKind = nil, ""
 	}
 	add := func(s string) { flush(); blocks = append(blocks, s) }
+	questions := map[string]json.RawMessage{} // question id -> elicitation request
 
 	for _, e := range evs {
 		switch e.Type {
@@ -65,11 +67,15 @@ func renderTranscript(evs []Event, n int) string {
 				Message string `json:"message"`
 			}
 			_ = json.Unmarshal(e.Request, &q)
+			questions[e.ID] = e.Request
 			add(fmt.Sprintf("> question %s: %s", e.ID, q.Message))
 		case "permission_resolved":
 			what := e.Option
-			if e.Error != "" {
+			switch {
+			case e.Error != "":
 				what = e.Error
+			case len(e.Answer) > 0:
+				what = describeAnswer(questions[e.ID], e.Answer)
 			}
 			add(fmt.Sprintf("> %s answered %s: %s", e.By, e.ID, what))
 		case "turn_end":
@@ -89,4 +95,43 @@ func renderTranscript(evs []Event, n int) string {
 		blocks = blocks[len(blocks)-n:]
 	}
 	return strings.Join(blocks, "\n\n") + "\n"
+}
+
+// describeAnswer renders a question answer as "<field title>: <value>",
+// using the titles from the question's requested schema.
+func describeAnswer(request, answer json.RawMessage) string {
+	var req struct {
+		Schema struct {
+			Properties map[string]struct {
+				Title string `json:"title"`
+			} `json:"properties"`
+		} `json:"requestedSchema"`
+	}
+	_ = json.Unmarshal(request, &req)
+	var values map[string]json.RawMessage
+	if json.Unmarshal(answer, &values) != nil {
+		return string(answer)
+	}
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		v := string(values[k])
+		var s string
+		if json.Unmarshal(values[k], &s) == nil {
+			v = s
+		}
+		if v == "" {
+			continue
+		}
+		title := req.Schema.Properties[k].Title
+		if title == "" {
+			title = k
+		}
+		parts = append(parts, title+": "+v)
+	}
+	return strings.Join(parts, "; ")
 }
