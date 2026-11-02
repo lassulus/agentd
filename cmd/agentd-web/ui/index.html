@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>agentd</title>
+<style>
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; display: flex; height: 100vh; }
+  nav { width: 18em; border-right: 1px solid #ccc; overflow-y: auto; padding: .5em; flex-shrink: 0; }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  nav h3 { margin: .8em 0 .2em; font-size: 1em; }
+  nav a { display: block; padding: .3em; color: inherit; text-decoration: none; border-radius: 3px; }
+  nav a:hover, nav a.active { background: #eee; }
+  .state { font-size: .8em; padding: 0 .3em; border-radius: 3px; background: #ddd; }
+  .state.waiting { background: #fc6; } .state.working { background: #9cf; }
+  .state.error { background: #f99; } .state.stopped { color: #888; }
+  .muted { color: #777; font-size: .85em; }
+  nav a .muted { overflow-wrap: anywhere; }
+  #pending b { display: block; margin-bottom: .3em; }
+  #header { padding: .5em; border-bottom: 1px solid #ccc; }
+  #log { flex: 1; overflow-y: auto; padding: .5em; }
+  #log div { margin: .3em 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .user { background: #eef; padding: .3em; }
+  .thought { color: #777; font-style: italic; }
+  .tool, .event { color: #555; font-family: monospace; font-size: .9em; }
+  #pending > div { background: #fff3cd; border-top: 1px solid #ccc; padding: .5em; }
+  #pending pre { white-space: pre-wrap; max-height: 12em; overflow: auto; }
+  form.send { display: flex; gap: .3em; padding: .5em; border-top: 1px solid #ccc; }
+  form.send textarea { flex: 1; min-height: 3em; }
+  #new label { display: block; margin: .3em 0; }
+  #new input, #new select, #new textarea { width: 100%; box-sizing: border-box; }
+  @media (max-width: 700px) { body { flex-direction: column; } nav { width: auto; max-height: 35vh; border-right: 0; border-bottom: 1px solid #ccc; } }
+</style>
+</head>
+<body>
+<nav>
+  <div><button id="newBtn">New agent</button> <label><input type="checkbox" id="showStopped"> stopped</label> <a href="/logout" style="display:inline">Log out</a></div>
+  <div id="agents"></div>
+</nav>
+<main>
+  <div id="header" class="muted">Choose an agent.</div>
+  <form id="new" hidden style="padding: .5em; max-width: 40em">
+    <label>Backend <select name="backend"></select></label>
+    <label>Harness <select name="harness"></select></label>
+    <label>Directory (relative to the workspace root) <input name="cwd"></label>
+    <label>Name <input name="agentName"></label>
+    <label>Prompt <textarea name="prompt" rows="5"></textarea></label>
+    <button>Start</button>
+  </form>
+  <div id="log"></div>
+  <div id="pending"></div>
+  <form class="send" id="send" hidden>
+    <textarea name="text" placeholder="Message (Ctrl+Enter sends)"></textarea>
+    <button>Send</button>
+    <button type="button" id="cancel">Cancel turn</button>
+  </form>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
