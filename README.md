@@ -82,6 +82,35 @@ reverse proxy in front.
 OAuth2 tokens must be JWTs (in Zitadel: the app's token type "JWT"); agentd
 checks signature, issuer, audience and expiry.
 
+## Web UI
+
+`agentd-web` (same package, its own service) is a web UI for one or more
+agentd instances: a list of the agents of all backends, a live transcript,
+sending messages, cancelling a turn, answering permissions and questions,
+and starting new agents.
+
+Users log in with OIDC (authorization code flow with PKCE, as a public
+client without secret). agentd-web keeps the access token in memory behind
+a session cookie and sends it as bearer token to the backends, so each
+agentd authorizes the user with its own `auth.oidc` and `users`. The
+OIDC app's access tokens must be JWTs, and the backends' `audience` must
+be in them (in Zitadel: the app's client id, or the project id). Zitadel's
+access tokens carry no email, so list the users' `sub` in `users`.
+
+```nix
+services.agentd-web = {
+  enable = true;
+  url = "https://agents.example.com";          # redirect URI: <url>/callback
+  backends = [ { name = "local"; url = "http://127.0.0.1:8790"; } ];
+  oidc = { issuer = "https://id.example.com"; clientId = "<client id>"; };
+};
+services.agentd.auth.oidc = { issuer = "https://id.example.com"; audience = "<client id>"; };
+services.agentd.users = [ "<sub>" ];
+```
+
+agentd-web listens on `127.0.0.1:8792`; put a TLS reverse proxy in front.
+When the access token expires, the next request logs in again.
+
 ## Development
 
 ```sh
