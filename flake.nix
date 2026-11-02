@@ -21,8 +21,12 @@
       nixosModules.default =
         { lib, pkgs, ... }:
         {
-          imports = [ ./nix/module.nix ];
+          imports = [
+            ./nix/module.nix
+            ./nix/web-module.nix
+          ];
           services.agentd.package = lib.mkDefault (agentdFor pkgs);
+          services.agentd-web.package = lib.mkDefault (agentdFor pkgs);
         };
 
       checks = forAll (pkgs: {
@@ -47,12 +51,27 @@
                     };
                     users = [ "alice@example.com" ];
                   };
+                  services.agentd-web = {
+                    enable = true;
+                    url = "https://agents.example.com";
+                    backends = [
+                      {
+                        name = "local";
+                        url = "http://127.0.0.1:8790";
+                      }
+                    ];
+                    oidc = {
+                      issuer = "https://id.example.com";
+                      clientId = "agentd-web";
+                    };
+                  };
                 }
               ];
             };
           in
           pkgs.linkFarm "agentd-module" {
             "agentd.service" = sys.config.systemd.units."agentd.service".unit;
+            "agentd-web.service" = sys.config.systemd.units."agentd-web.service".unit;
           };
       });
 
