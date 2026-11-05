@@ -252,6 +252,11 @@ $("#send").onsubmit = async (e) => {
 };
 $("#send").text.onkeydown = (e) => { if (e.key === "Enter" && e.ctrlKey) $("#send").requestSubmit(); };
 $("#cancel").onclick = () => current && api(current.backend, `/v1/agents/${current.id}/cancel`, "POST").catch((e) => alert(e.message));
+// Stops the agent's process; its history stays and a new message resumes it.
+$("#stop").onclick = () => current && busy($("#send"), async () => {
+  try { await api(current.backend, `/v1/agents/${current.id}`, "DELETE"); await refreshList(); }
+  catch (e) { alert(e.message); }
+});
 
 // --- new agent -------------------------------------------------------------
 
