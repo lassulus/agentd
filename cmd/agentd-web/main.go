@@ -38,9 +38,12 @@ type Config struct {
 		URL  string `json:"url"`
 	} `json:"backends"`
 	OIDC struct {
-		Issuer   string   `json:"issuer"`
-		ClientID string   `json:"clientId"`
-		Scopes   []string `json:"scopes"`
+		Issuer   string `json:"issuer"`
+		ClientID string `json:"clientId"`
+		// ClientIDFile holds the client id instead, for one that the IdP
+		// generates at runtime.
+		ClientIDFile string   `json:"clientIdFile"`
+		Scopes       []string `json:"scopes"`
 	} `json:"oidc"`
 }
 
@@ -55,6 +58,16 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if c.Listen == "" {
 		c.Listen = "127.0.0.1:8792"
+	}
+	if c.OIDC.ClientIDFile != "" {
+		if c.OIDC.ClientID != "" {
+			return nil, fmt.Errorf("%s: oidc: set clientId or clientIdFile, not both", path)
+		}
+		b, err := os.ReadFile(c.OIDC.ClientIDFile)
+		if err != nil {
+			return nil, fmt.Errorf("oidc.clientIdFile: %w", err)
+		}
+		c.OIDC.ClientID = strings.TrimSpace(string(b))
 	}
 	if c.URL == "" || c.OIDC.Issuer == "" || c.OIDC.ClientID == "" {
 		return nil, fmt.Errorf("%s: url, oidc.issuer and oidc.clientId are required", path)

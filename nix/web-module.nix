@@ -10,7 +10,11 @@ let
   configFile = pkgs.writeText "agentd-web.json" (
     builtins.toJSON {
       inherit (cfg) listen url backends;
-      oidc = { inherit (cfg.oidc) issuer clientId scopes; };
+      oidc = {
+        inherit (cfg.oidc) issuer clientId scopes;
+        clientIdFile =
+          if cfg.oidc.clientIdFile == null then null else "/run/credentials/agentd-web.service/client-id";
+      };
     }
   );
 in
@@ -59,8 +63,17 @@ in
         description = "OIDC issuer to log in with.";
       };
       clientId = lib.mkOption {
-        type = lib.types.str;
+        type = lib.types.nullOr lib.types.str;
+        default = null;
         description = "Client id of a public client (no secret; PKCE) whose access tokens are JWTs.";
+      };
+      clientIdFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          File with the client id instead, for one the IdP generates. Read by
+          systemd (LoadCredential), so it may be root-only.
+        '';
       };
       scopes = lib.mkOption {
         type = lib.types.listOf lib.types.str;
@@ -71,6 +84,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = (cfg.oidc.clientId == null) != (cfg.oidc.clientIdFile == null);
+        message = "services.agentd-web.oidc needs exactly one of clientId and clientIdFile";
+      }
+    ];
+
     systemd.services.agentd-web = {
       description = "agentd-web";
       wantedBy = [ "multi-user.target" ];
@@ -79,6 +99,7 @@ in
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/agentd-web -config ${configFile}";
         DynamicUser = true;
+        LoadCredential = lib.optional (cfg.oidc.clientIdFile != null) "client-id:${cfg.oidc.clientIdFile}";
         Restart = "on-failure";
       };
     };

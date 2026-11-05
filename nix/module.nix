@@ -13,7 +13,17 @@ let
       inherit (cfg) listen workspaceRoot users;
       stateDir = home;
       harnesses = lib.mapAttrs (_: h: { inherit (h) command env; }) cfg.harnesses;
-      auth.oidc = cfg.auth.oidc;
+      auth.oidc =
+        let
+          o = cfg.auth.oidc;
+        in
+        if o == null then
+          null
+        else
+          {
+            inherit (o) issuer audience;
+            audienceFile = if o.audienceFile == null then null else "/run/credentials/agentd.service/audience";
+          };
     }
   );
 in
@@ -82,8 +92,17 @@ in
                 description = "OIDC issuer whose JWT access tokens are accepted.";
               };
               audience = lib.mkOption {
-                type = lib.types.str;
+                type = lib.types.nullOr lib.types.str;
+                default = null;
                 description = "Required token audience (the OAuth2 client id).";
+              };
+              audienceFile = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = ''
+                  File with the audience instead, for a client id the IdP
+                  generates. Read by systemd (LoadCredential), so it may be root-only.
+                '';
               };
             };
           }
@@ -109,6 +128,11 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = lib.optional (cfg.auth.oidc != null) {
+      assertion = (cfg.auth.oidc.audience == null) != (cfg.auth.oidc.audienceFile == null);
+      message = "services.agentd.auth.oidc needs exactly one of audience and audienceFile";
+    };
+
     users.users.agentd = {
       isSystemUser = true;
       group = "agentd";
@@ -142,7 +166,11 @@ in
             "%d/tokens"
           ]
         );
-        LoadCredential = lib.optional (cfg.auth.tokensFile != null) "tokens:${cfg.auth.tokensFile}";
+        LoadCredential =
+          lib.optional (cfg.auth.tokensFile != null) "tokens:${cfg.auth.tokensFile}"
+          ++ lib.optional (
+            cfg.auth.oidc != null && cfg.auth.oidc.audienceFile != null
+          ) "audience:${cfg.auth.oidc.audienceFile}";
         # agentd stops its agents on SIGTERM; whatever is left gets killed after.
         KillMode = "mixed";
         Restart = "on-failure";

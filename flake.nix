@@ -47,7 +47,7 @@
                     auth.tokensFile = "/run/secrets/agentd-tokens";
                     auth.oidc = {
                       issuer = "https://id.example.com";
-                      audience = "agentd";
+                      audienceFile = "/var/lib/zitadel-apps/agentd-web.client-id";
                     };
                     users = [ "alice@example.com" ];
                   };
@@ -62,7 +62,7 @@
                     ];
                     oidc = {
                       issuer = "https://id.example.com";
-                      clientId = "agentd-web";
+                      clientIdFile = "/var/lib/zitadel-apps/agentd-web.client-id";
                     };
                   };
                 }
