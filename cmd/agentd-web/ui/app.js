@@ -129,7 +129,10 @@ function render(ev) {
     case "turn_end":
       block("event", ev.error ? `turn failed: ${ev.error}` : `turn ended${ev.stop_reason ? ` (${ev.stop_reason})` : ""}`);
       break;
-    case "config_changed": block("event", `${ev.by} set ${JSON.stringify(ev.values)}`); break;
+    case "config_changed":
+      block("event", `${ev.by} set ${JSON.stringify(ev.values)}`);
+      if (current) loadConfig(current.backend, current.id);
+      break;
     case "state":
       $("#state").textContent = ev.state;
       $("#state").className = "state " + ev.state;
@@ -147,7 +150,9 @@ async function open(backend, id) {
   const h = $("#header");
   h.className = "";
   const title = el("b", id), info = el("div", backend, "muted");
-  h.replaceChildren(title, " ", el("span", "", "state"), info);
+  const cfg = el("div");
+  cfg.id = "config";
+  h.replaceChildren(title, " ", el("span", "", "state"), info, cfg);
   h.querySelector(".state").id = "state";
   const es = new EventSource(`/api/b/${encodeURIComponent(backend)}/v1/agents/${id}/events?since=0`);
   es.onmessage = (m) => render(JSON.parse(m.data));
@@ -157,8 +162,46 @@ async function open(backend, id) {
   try {
     const a = await api(backend, `/v1/agents/${id}`);
     title.textContent = a.name || id;
-    info.textContent = `${backend} · ${a.harness} · ${a.cwd}${a.model ? " · " + a.model : ""} · ${a.owner}`;
+    info.textContent = `${backend} · ${a.harness} · ${a.cwd} · ${a.owner}`;
+    showConfig(backend, id, a.config || []);
   } catch (e) { info.textContent = e.message; }
+}
+
+// showConfig renders the harness's config options (model, effort, mode, …)
+// as controls; a change is sent as PATCH .../config, which resumes a
+// stopped agent.
+function showConfig(backend, id, options) {
+  const box = $("#config");
+  if (!box || current?.id !== id) return;
+  box.replaceChildren(...options.map((o) => {
+    const label = el("label", (o.name || o.id) + " ");
+    let input;
+    if (o.type === "boolean") {
+      input = el("input");
+      input.type = "checkbox";
+      input.checked = o.value === true;
+    } else {
+      input = el("select");
+      const cur = typeof o.value === "string" ? o.value : JSON.stringify(o.value);
+      const values = o.options?.length ? o.options : [cur];
+      if (!values.includes(cur)) values.unshift(cur);
+      for (const v of values) { const opt = el("option", v); opt.value = v; input.append(opt); }
+      input.value = cur;
+    }
+    input.onchange = async () => {
+      input.disabled = true;
+      const value = o.type === "boolean" ? input.checked : input.value;
+      try { showConfig(backend, id, await api(backend, `/v1/agents/${id}/config`, "PATCH", { [o.id]: value })); }
+      catch (e) { alert(e.message); loadConfig(backend, id); }
+    };
+    label.append(input);
+    return label;
+  }));
+}
+
+async function loadConfig(backend, id) {
+  const cfg = await api(backend, `/v1/agents/${id}/config`).catch(() => null);
+  if (cfg) showConfig(backend, id, cfg);
 }
 
 function schedulePerms() {
