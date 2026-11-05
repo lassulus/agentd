@@ -113,6 +113,10 @@ services.agentd.auth.oidc = { issuer = "https://id.example.com"; audience = "<cl
 services.agentd.users = [ "<sub>" ];
 ```
 
+When the IdP generates the client id at runtime, use
+`oidc.clientIdFile` and `auth.oidc.audienceFile` instead: files holding
+just the id, read by systemd, so they may be root-only.
+
 agentd-web listens on `127.0.0.1:8792`; put a TLS reverse proxy in front.
 When the access token expires, the next request logs in again.
 

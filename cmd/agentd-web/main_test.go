@@ -285,4 +285,15 @@ func TestLoadConfig(t *testing.T) {
 	if _, err := loadConfig(p); err == nil {
 		t.Fatal("missing url/clientId accepted")
 	}
+
+	idFile := filepath.Join(t.TempDir(), "client-id")
+	os.WriteFile(idFile, []byte("generated-id\n"), 0o600)
+	os.WriteFile(p, []byte(`{"url":"https://web.example","oidc":{"issuer":"https://id.example","clientIdFile":"`+idFile+`"}}`), 0o600)
+	if c, err := loadConfig(p); err != nil || c.OIDC.ClientID != "generated-id" {
+		t.Fatalf("clientIdFile: %+v %v", c, err)
+	}
+	os.WriteFile(p, []byte(`{"url":"https://web.example","oidc":{"issuer":"https://id.example","clientId":"web","clientIdFile":"`+idFile+`"}}`), 0o600)
+	if _, err := loadConfig(p); err == nil {
+		t.Fatal("clientId and clientIdFile both accepted")
+	}
 }
