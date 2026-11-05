@@ -31,6 +31,15 @@ async function api(backend, path, method = "GET", body) {
   return text ? JSON.parse(text) : null;
 }
 
+// busy runs fn with form's buttons disabled, so a slow request can't be
+// sent twice by clicking again.
+async function busy(form, fn) {
+  const buttons = [...form.querySelectorAll("button")];
+  if (buttons.some((b) => b.disabled)) return;
+  buttons.forEach((b) => (b.disabled = true));
+  try { await fn(); } finally { buttons.forEach((b) => (b.disabled = false)); }
+}
+
 async function checkSession() {
   const r = await fetch("/api/backends");
   if (r.status === 401) location = "/login";
@@ -236,8 +245,10 @@ $("#send").onsubmit = async (e) => {
   e.preventDefault();
   const t = e.target.text;
   if (!current || !t.value.trim()) return;
-  try { await api(current.backend, `/v1/agents/${current.id}/messages`, "POST", { text: t.value }); t.value = ""; }
-  catch (err) { alert(err.message); }
+  await busy(e.target, async () => {
+    try { await api(current.backend, `/v1/agents/${current.id}/messages`, "POST", { text: t.value }); t.value = ""; }
+    catch (err) { alert(err.message); }
+  });
 };
 $("#send").text.onkeydown = (e) => { if (e.key === "Enter" && e.ctrlKey) $("#send").requestSubmit(); };
 $("#cancel").onclick = () => current && api(current.backend, `/v1/agents/${current.id}/cancel`, "POST").catch((e) => alert(e.message));
@@ -265,11 +276,13 @@ newForm.onsubmit = async (e) => {
   if (newForm.agentName.value) body.name = newForm.agentName.value;
   if (newForm.prompt.value) body.prompt = newForm.prompt.value;
   const backend = newForm.backend.value;
-  try {
-    const a = await api(backend, "/v1/agents", "POST", body);
-    newForm.reset();
-    location.hash = `#${encodeURIComponent(backend)}/${a.id}`;
-  } catch (err) { alert(err.message); }
+  await busy(newForm, async () => {
+    try {
+      const a = await api(backend, "/v1/agents", "POST", body);
+      newForm.reset();
+      location.hash = `#${encodeURIComponent(backend)}/${a.id}`;
+    } catch (err) { alert(err.message); }
+  });
 };
 
 // --- start -------------------------------------------------------------------
