@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Harness struct {
@@ -21,6 +22,9 @@ type Config struct {
 		OIDC *struct {
 			Issuer   string `json:"issuer"`
 			Audience string `json:"audience"`
+			// AudienceFile holds the audience instead, for a client id
+			// that the IdP generates at runtime.
+			AudienceFile string `json:"audienceFile"`
 		} `json:"oidc"`
 		TokensFile string `json:"tokensFile"`
 	} `json:"auth"`
@@ -48,6 +52,16 @@ func loadConfig(path string) (*Config, error) {
 		if len(h.Command) == 0 {
 			return nil, fmt.Errorf("%s: harness %q has no command", path, name)
 		}
+	}
+	if o := c.Auth.OIDC; o != nil && o.AudienceFile != "" {
+		if o.Audience != "" {
+			return nil, fmt.Errorf("%s: auth.oidc: set audience or audienceFile, not both", path)
+		}
+		b, err := os.ReadFile(o.AudienceFile)
+		if err != nil {
+			return nil, fmt.Errorf("auth.oidc.audienceFile: %w", err)
+		}
+		o.Audience = strings.TrimSpace(string(b))
 	}
 	root, err := filepath.EvalSymlinks(c.WorkspaceRoot)
 	if err != nil {

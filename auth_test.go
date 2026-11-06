@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -58,11 +60,17 @@ func fakeIssuer(t *testing.T) (*httptest.Server, func(claims map[string]any) str
 
 func TestOIDC(t *testing.T) {
 	iss, sign := fakeIssuer(t)
-	cfg := &Config{Users: []string{"sub-lass", "lass@example.com"}}
-	cfg.Auth.OIDC = &struct {
-		Issuer   string `json:"issuer"`
-		Audience string `json:"audience"`
-	}{Issuer: iss.URL, Audience: "agentd"}
+	// The audience comes from a file, as for a client id the IdP generates.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "audience"), []byte("agentd\n"), 0o600)
+	cfgPath := filepath.Join(dir, "config.json")
+	os.WriteFile(cfgPath, []byte(`{"stateDir":"`+dir+`","workspaceRoot":"`+dir+`",
+		"auth":{"oidc":{"issuer":"`+iss.URL+`","audienceFile":"`+dir+`/audience"}},
+		"users":["sub-lass","lass@example.com"]}`), 0o600)
+	cfg, err := loadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	auth, err := newAuthenticator(cfg, "")
 	if err != nil {
 		t.Fatal(err)
