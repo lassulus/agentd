@@ -86,12 +86,29 @@ function block(cls, text) {
   return d;
 }
 
+// A tool call is a collapsed <details>: the summary shows title and
+// status, expanding it shows the call's content (command output, diffs).
+// Each update's content replaces the previous one (ACP).
+function newTool(id) {
+  const d = block("tool", "");
+  d.replaceChildren(el("details"));
+  const det = d.firstChild;
+  det.append(el("summary"), el("pre"));
+  tools[id] = { el: det, title: "", status: "" };
+}
+
 function setTool(u) {
   const t = tools[u.toolCallId];
   if (!t) return;
   if (u.title) t.title = u.title;
   if (u.status) t.status = u.status;
-  t.el.textContent = `tool: ${t.title}${t.status ? ` [${t.status}]` : ""}`;
+  t.el.firstChild.textContent = `tool: ${t.title}${t.status ? ` [${t.status}]` : ""}`;
+  if (u.content) {
+    t.el.lastChild.textContent = u.content.map((c) =>
+      c.type === "diff" ? `${c.path}:\n${c.newText ?? ""}`
+      : c.type === "terminal" ? `(terminal ${c.terminalId})`
+      : c.content?.type === "text" ? c.content.text : "").filter(Boolean).join("\n");
+  }
 }
 
 function render(ev) {
@@ -110,7 +127,7 @@ function render(ev) {
           break;
         }
         case "tool_call":
-          tools[u.toolCallId] = { el: block("tool", ""), title: "", status: "" };
+          newTool(u.toolCallId);
           setTool(u);
           break;
         case "tool_call_update": setTool(u); break;
