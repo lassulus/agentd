@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -120,7 +121,8 @@ type testEnv struct {
 	fakeLog string
 }
 
-func newTestEnv(t *testing.T, stateDir string) *testEnv {
+// newTestEnv starts agentd with the fake harness; extra adds config keys.
+func newTestEnv(t *testing.T, stateDir string, extra ...map[string]any) *testEnv {
 	t.Helper()
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "repo"), 0o700); err != nil {
@@ -130,13 +132,17 @@ func newTestEnv(t *testing.T, stateDir string) *testEnv {
 		stateDir = t.TempDir()
 	}
 	fakeLog := filepath.Join(stateDir, "fake.log")
-	cfgJSON, _ := json.Marshal(map[string]any{
+	cfgMap := map[string]any{
 		"stateDir": stateDir, "workspaceRoot": root,
 		"harnesses": map[string]any{"fake": map[string]any{
 			"command": []string{os.Args[0]},
 			"env":     map[string]string{"AGENTD_FAKE_AGENT": "1", "AGENTD_FAKE_LOG": fakeLog},
 		}},
-	})
+	}
+	for _, x := range extra {
+		maps.Copy(cfgMap, x)
+	}
+	cfgJSON, _ := json.Marshal(cfgMap)
 	cfgPath := filepath.Join(t.TempDir(), "config.json")
 	os.WriteFile(cfgPath, cfgJSON, 0o600)
 	cfg, err := loadConfig(cfgPath)
