@@ -50,6 +50,16 @@
                       audienceFile = "/var/lib/zitadel-apps/agentd-web.client-id";
                     };
                     users = [ "alice@example.com" ];
+                    notify = [
+                      {
+                        url = "http://127.0.0.1:8644/webhooks/agentd";
+                        secretFile = "/run/secrets/agentd-hook";
+                      }
+                      {
+                        url = "https://hooks.example.com/turns";
+                        events = [ "turn_end" ];
+                      }
+                    ];
                   };
                   services.agentd-web = {
                     enable = true;

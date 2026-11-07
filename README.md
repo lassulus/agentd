@@ -43,6 +43,10 @@ POST   /v1/agents/{id}/permissions/{req}      {"option":"allow-once"} or, for qu
   `config_changed`, `turn_end`, `state`.
 - A stopped agent (also after an agentd restart) is resumed with ACP
   `session/resume`, or `session/load` if that is all the harness offers.
+- For each `notify` entry, agentd POSTs `{"type","agent","event","text"}`
+  to its `url` for every event whose type is in that entry's `events` (`text` is the
+  event's transcript block; for `turn_end` the agent's last message), signed
+  with `X-Hub-Signature-256` when `secretFile` is set. Nothing is retried.
 
 Example:
 
@@ -73,6 +77,7 @@ api -X PATCH $URL/v1/agents/a_xxxx/config -d '{"model":"opus"}'
     auth.tokensFile = "/run/secrets/agentd-tokens"; # lines: <user> <sha256 hex of token>
     auth.oidc = { issuer = "https://id.example.com"; audience = "<client id>"; };
     users = [ "<sub>" "alice@example.com" ];        # OAuth2 users (email only if verified)
+    notify = [ { url = "https://hooks.example.com/agentd"; secretFile = "/run/secrets/agentd-hook"; } ];
   };
 }
 ```

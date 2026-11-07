@@ -30,7 +30,18 @@ type Config struct {
 	} `json:"auth"`
 	// Users allowed to log in with OAuth2 tokens: a token's `sub`, or its
 	// email when the token says `email_verified`.
-	Users []string `json:"users"`
+	Users  []string  `json:"users"`
+	Notify []*Notify `json:"notify"`
+}
+
+// Notify posts the listed history event types to one webhook.
+type Notify struct {
+	URL string `json:"url"`
+	// SecretFile holds an HMAC key; the request then carries
+	// X-Hub-Signature-256 (as GitHub sends it).
+	SecretFile string   `json:"secretFile"`
+	Events     []string `json:"events"`
+	secret     string
 }
 
 func loadConfig(path string) (*Config, error) {
@@ -62,6 +73,18 @@ func loadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("auth.oidc.audienceFile: %w", err)
 		}
 		o.Audience = strings.TrimSpace(string(b))
+	}
+	for i, n := range c.Notify {
+		if n.URL == "" || len(n.Events) == 0 {
+			return nil, fmt.Errorf("%s: notify[%d] needs url and events", path, i)
+		}
+		if n.SecretFile != "" {
+			b, err := os.ReadFile(n.SecretFile)
+			if err != nil {
+				return nil, fmt.Errorf("notify[%d].secretFile: %w", i, err)
+			}
+			n.secret = strings.TrimSpace(string(b))
+		}
 	}
 	root, err := filepath.EvalSymlinks(c.WorkspaceRoot)
 	if err != nil {
