@@ -129,6 +129,7 @@ func (a *Agent) appendLocked(e Event) {
 	a.meta.Updated = e.TS
 	close(a.changed)
 	a.changed = make(chan struct{})
+	a.notifyLocked(e)
 }
 
 // eventsAfter returns up to limit events with seq > since; since < 0 means
@@ -779,6 +780,10 @@ type agentView struct {
 func (a *Agent) View(withConfig bool) agentView {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.viewLocked(withConfig)
+}
+
+func (a *Agent) viewLocked(withConfig bool) agentView {
 	cfg := a.configLocked()
 	v := agentView{
 		ID: a.meta.ID, Name: a.meta.Name, Harness: a.meta.Harness, Cwd: a.meta.Cwd, Owner: a.meta.Owner,

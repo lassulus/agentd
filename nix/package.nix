@@ -10,6 +10,7 @@ buildGoModule {
       ../go.mod
       ../go.sum
       (lib.fileset.fileFilter (f: f.hasExt "go") ./..)
+      ../cmd/agentd-web/ui
     ];
   };
 
@@ -19,7 +20,7 @@ buildGoModule {
   ldflags = [ "-X main.version=0.1.0" ];
 
   meta = {
-    description = "Run ACP coding agents behind a REST API";
+    description = "Run ACP coding agents behind a REST API, with a web UI (agentd-web)";
     license = lib.licenses.mit;
     mainProgram = "agentd";
   };

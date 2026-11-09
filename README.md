@@ -43,6 +43,10 @@ POST   /v1/agents/{id}/permissions/{req}      {"option":"allow-once"} or, for qu
   `config_changed`, `turn_end`, `state`.
 - A stopped agent (also after an agentd restart) is resumed with ACP
   `session/resume`, or `session/load` if that is all the harness offers.
+- For each `notify` entry, agentd POSTs `{"type","agent","event","text"}`
+  to its `url` for every event whose type is in that entry's `events` (`text` is the
+  event's transcript block; for `turn_end` the agent's last message), signed
+  with `X-Hub-Signature-256` when `secretFile` is set. Nothing is retried.
 
 Example:
 
@@ -73,6 +77,7 @@ api -X PATCH $URL/v1/agents/a_xxxx/config -d '{"model":"opus"}'
     auth.tokensFile = "/run/secrets/agentd-tokens"; # lines: <user> <sha256 hex of token>
     auth.oidc = { issuer = "https://id.example.com"; audience = "<client id>"; };
     users = [ "<sub>" "alice@example.com" ];        # OAuth2 users (email only if verified)
+    notify = [ { url = "https://hooks.example.com/agentd"; secretFile = "/run/secrets/agentd-hook"; } ];
   };
 }
 ```
@@ -86,6 +91,39 @@ reverse proxy in front.
 
 OAuth2 tokens must be JWTs (in Zitadel: the app's token type "JWT"); agentd
 checks signature, issuer, audience and expiry.
+
+## Web UI
+
+`agentd-web` (same package, its own service) is a web UI for one or more
+agentd instances: a list of the agents of all backends, a live transcript,
+sending messages, cancelling a turn, answering permissions and questions,
+and starting new agents.
+
+Users log in with OIDC (authorization code flow with PKCE, as a public
+client without secret). agentd-web keeps the access token in memory behind
+a session cookie and sends it as bearer token to the backends, so each
+agentd authorizes the user with its own `auth.oidc` and `users`. The
+OIDC app's access tokens must be JWTs, and the backends' `audience` must
+be in them (in Zitadel: the app's client id, or the project id). Zitadel's
+access tokens carry no email, so list the users' `sub` in `users`.
+
+```nix
+services.agentd-web = {
+  enable = true;
+  url = "https://agents.example.com";          # redirect URI: <url>/callback
+  backends = [ { name = "local"; url = "http://127.0.0.1:8790"; } ];
+  oidc = { issuer = "https://id.example.com"; clientId = "<client id>"; };
+};
+services.agentd.auth.oidc = { issuer = "https://id.example.com"; audience = "<client id>"; };
+services.agentd.users = [ "<sub>" ];
+```
+
+When the IdP generates the client id at runtime, use
+`oidc.clientIdFile` and `auth.oidc.audienceFile` instead: files holding
+just the id, read by systemd, so they may be root-only.
+
+agentd-web listens on `127.0.0.1:8792`; put a TLS reverse proxy in front.
+When the access token expires, the next request logs in again.
 
 ## Development
 

@@ -13,7 +13,22 @@ let
       inherit (cfg) listen workspaceRoot users;
       stateDir = home;
       harnesses = lib.mapAttrs (_: h: { inherit (h) command env; }) cfg.harnesses;
-      auth.oidc = cfg.auth.oidc;
+      auth.oidc =
+        let
+          o = cfg.auth.oidc;
+        in
+        if o == null then
+          null
+        else
+          {
+            inherit (o) issuer audience;
+            audienceFile = if o.audienceFile == null then null else "/run/credentials/agentd.service/audience";
+          };
+      notify = lib.imap0 (i: n: {
+        inherit (n) url events;
+        secretFile =
+          if n.secretFile == null then null else "/run/credentials/agentd.service/notify-${toString i}";
+      }) cfg.notify;
     }
   );
 in
@@ -82,8 +97,17 @@ in
                 description = "OIDC issuer whose JWT access tokens are accepted.";
               };
               audience = lib.mkOption {
-                type = lib.types.str;
+                type = lib.types.nullOr lib.types.str;
+                default = null;
                 description = "Required token audience (the OAuth2 client id).";
+              };
+              audienceFile = lib.mkOption {
+                type = lib.types.nullOr lib.types.str;
+                default = null;
+                description = ''
+                  File with the audience instead, for a client id the IdP
+                  generates. Read by systemd (LoadCredential), so it may be root-only.
+                '';
               };
             };
           }
@@ -106,9 +130,45 @@ in
       default = [ ];
       description = "OAuth2 users allowed in: token `sub`, or email if the token marks it verified.";
     };
+
+    notify = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            url = lib.mkOption {
+              type = lib.types.str;
+              description = "Webhook that receives a JSON POST per event.";
+            };
+            events = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [
+                "permission_request"
+                "question"
+              ];
+              description = "History event types to send.";
+            };
+            secretFile = lib.mkOption {
+              type = lib.types.nullOr lib.types.str;
+              default = null;
+              description = ''
+                HMAC key; requests then carry `X-Hub-Signature-256`.
+                Read by systemd (LoadCredential), so it may be root-only.
+              '';
+            };
+          };
+        }
+      );
+      default = [ ];
+      description = "Webhooks that get history events (e.g. pending permissions), each its own types.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = lib.optional (cfg.auth.oidc != null) {
+      assertion = (cfg.auth.oidc.audience == null) != (cfg.auth.oidc.audienceFile == null);
+      message = "services.agentd.auth.oidc needs exactly one of audience and audienceFile";
+    };
+
     users.users.agentd = {
       isSystemUser = true;
       group = "agentd";
@@ -142,7 +202,16 @@ in
             "%d/tokens"
           ]
         );
-        LoadCredential = lib.optional (cfg.auth.tokensFile != null) "tokens:${cfg.auth.tokensFile}";
+        LoadCredential =
+          lib.optional (cfg.auth.tokensFile != null) "tokens:${cfg.auth.tokensFile}"
+          ++ lib.optional (
+            cfg.auth.oidc != null && cfg.auth.oidc.audienceFile != null
+          ) "audience:${cfg.auth.oidc.audienceFile}"
+          ++ lib.concatLists (
+            lib.imap0 (
+              i: n: lib.optional (n.secretFile != null) "notify-${toString i}:${n.secretFile}"
+            ) cfg.notify
+          );
         # agentd stops its agents on SIGTERM; whatever is left gets killed after.
         KillMode = "mixed";
         Restart = "on-failure";
