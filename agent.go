@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -805,11 +806,23 @@ type Manager struct {
 
 	mu     sync.Mutex
 	agents map[string]*Agent
+	// Default config of new agents, per harness; set at runtime and kept
+	// in defaultsFile. The inner maps are replaced, never modified.
+	defaults     map[string]map[string]json.RawMessage
+	defaultsFile string
 }
 
 func newManager(cfg *Config) (*Manager, error) {
-	m := &Manager{cfg: cfg, dir: filepath.Join(cfg.StateDir, "agents"), agents: map[string]*Agent{}}
+	m := &Manager{cfg: cfg, dir: filepath.Join(cfg.StateDir, "agents"), agents: map[string]*Agent{},
+		defaults: map[string]map[string]json.RawMessage{}, defaultsFile: filepath.Join(cfg.StateDir, "harness-config.json")}
 	if err := os.MkdirAll(m.dir, 0o700); err != nil {
+		return nil, err
+	}
+	if b, err := os.ReadFile(m.defaultsFile); err == nil {
+		if err := json.Unmarshal(b, &m.defaults); err != nil {
+			return nil, fmt.Errorf("%s: %w", m.defaultsFile, err)
+		}
+	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
 	entries, err := os.ReadDir(m.dir)
@@ -869,6 +882,46 @@ func (m *Manager) loadAgent(dir string) (*Agent, error) {
 	a.syncStateLocked() // a running agent from before a restart is stopped now
 	a.mu.Unlock()
 	return a, nil
+}
+
+// HarnessConfig returns the default config of new agents of a harness.
+func (m *Manager) HarnessConfig(name string) map[string]json.RawMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c := m.defaults[name]; c != nil {
+		return c
+	}
+	return map[string]json.RawMessage{}
+}
+
+// SetHarnessConfig merges values into a harness's default config; a null
+// value removes the key. Values are checked only when an agent starts.
+func (m *Manager) SetHarnessConfig(name string, values map[string]json.RawMessage) (map[string]json.RawMessage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := maps.Clone(m.defaults[name])
+	if c == nil {
+		c = map[string]json.RawMessage{}
+	}
+	for k, v := range values {
+		if v == nil || string(v) == "null" {
+			delete(c, k)
+		} else {
+			c[k] = v
+		}
+	}
+	all := maps.Clone(m.defaults)
+	all[name] = c
+	b, _ := json.MarshalIndent(all, "", "  ")
+	tmp := m.defaultsFile + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return nil, err
+	}
+	if err := os.Rename(tmp, m.defaultsFile); err != nil {
+		return nil, err
+	}
+	m.defaults = all
+	return c, nil
 }
 
 // resolveCwd returns cwd (absolute or relative to the workspace root) with
@@ -931,8 +984,11 @@ func (m *Manager) Create(ctx context.Context, body createBody, owner string) (*A
 	if err := a.ensureRunning(ctx); err != nil {
 		return fail(errf(502, "starting %s: %v", body.Harness, err))
 	}
-	if len(body.Config) > 0 {
-		if err := a.SetConfig(ctx, body.Config, owner); err != nil {
+	values := map[string]json.RawMessage{}
+	maps.Copy(values, m.HarnessConfig(body.Harness))
+	maps.Copy(values, body.Config)
+	if len(values) > 0 {
+		if err := a.SetConfig(ctx, values, owner); err != nil {
 			return fail(err)
 		}
 	}

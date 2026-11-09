@@ -13,6 +13,8 @@ tokens file, or an OAuth2 JWT access token from the configured issuer.
 
 ```
 GET    /v1/harnesses                          configured agent commands
+GET    /v1/harnesses/{name}/config            default config of new agents, {"thinking":"medium"}
+PATCH  /v1/harnesses/{name}/config            {"thinking":"medium"} merges, {"thinking":null} removes
 POST   /v1/agents                             {"harness","cwd","name","config":{…},"prompt"}
 GET    /v1/agents[?all=1|?state=waiting]      open agents (all=1: also stopped ones)
 GET    /v1/agents/{id}                        one agent, with its config options
@@ -28,6 +30,9 @@ GET    /v1/agents/{id}/permissions            pending permission requests and qu
 POST   /v1/agents/{id}/permissions/{req}      {"option":"allow-once"} or, for questions, {"answer":{…}} / {"decline":true}
 ```
 
+- A harness's default config (kept in the state dir) is applied to every new
+  agent of it like a POST `config`, whose values win per key. Values are only
+  checked then: a bad one fails the agent's creation. Running agents keep theirs.
 - `cwd` must be inside the workspace root; a relative `cwd` is taken from it.
 - States: `starting`, `idle`, `working`, `waiting` (a permission or question
   is pending), `stopped`, `error`.

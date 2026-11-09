@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,13 +33,19 @@ func TestMain(m *testing.M) {
 func fakeAgent() {
 	logf, _ := os.OpenFile(os.Getenv("AGENTD_FAKE_LOG"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	var mu sync.Mutex
-	model := "fast"
+	current := map[string]string{"model": "fast", "thinking": "high"}
+	choices := map[string][]string{"model": {"fast", "smart"}, "thinking": {"low", "medium", "high"}}
 	cancelled := make(chan struct{}, 1)
 	options := func() any {
-		return []any{map[string]any{
-			"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": model,
-			"options": []any{map[string]string{"value": "fast", "name": "Fast"}, map[string]string{"value": "smart", "name": "Smart"}},
-		}}
+		var out []any
+		for _, id := range []string{"model", "thinking"} {
+			var opts []any
+			for _, v := range choices[id] {
+				opts = append(opts, map[string]string{"value": v, "name": v})
+			}
+			out = append(out, map[string]any{"id": id, "name": id, "category": id, "type": "select", "currentValue": current[id], "options": opts})
+		}
+		return out
 	}
 	var connP atomic.Pointer[rpcConn] // set after newRPCConn starts reading
 	conn := func() *rpcConn { return connP.Load() }
@@ -67,10 +75,10 @@ func fakeAgent() {
 		case "session/resume":
 			return map[string]any{"configOptions": options()}, nil
 		case "session/set_config_option":
-			if p.ConfigID != "model" || (p.Value != "fast" && p.Value != "smart") {
+			if !slices.Contains(choices[p.ConfigID], p.Value) {
 				return nil, &rpcError{Code: -32602, Message: "bad option"}
 			}
-			model = p.Value
+			current[p.ConfigID] = p.Value
 			return map[string]any{"configOptions": options()}, nil
 		case "session/cancel":
 			cancelled <- struct{}{}
@@ -304,7 +312,7 @@ func TestAgentLifecycle(t *testing.T) {
 	if c := e.do("PATCH", "/v1/agents/"+a.ID+"/config", map[string]string{"model": "fast"}, &cfg); c != 200 {
 		t.Fatalf("patch config: %d", c)
 	}
-	if len(cfg) != 1 || string(cfg[0].Value) != `"fast"` || len(cfg[0].Options) != 2 {
+	if len(cfg) != 2 || cfg[0].ID != "model" || string(cfg[0].Value) != `"fast"` || len(cfg[0].Options) != 2 {
 		t.Fatalf("config: %+v", cfg)
 	}
 	if c := e.do("PATCH", "/v1/agents/"+a.ID+"/config", map[string]string{"colour": "red"}, nil); c != 400 {
@@ -392,5 +400,68 @@ func TestAgentLifecycle(t *testing.T) {
 	}
 	if c := e2.do("GET", "/v1/agents/"+a.ID, nil, nil); c != 404 {
 		t.Errorf("after purge: %d", c)
+	}
+}
+
+func TestHarnessConfigDefaults(t *testing.T) {
+	stateDir := t.TempDir()
+	e := newTestEnv(t, stateDir)
+	defaults := func(e *testEnv) map[string]string {
+		var got map[string]string
+		if c := e.do("GET", "/v1/harnesses/fake/config", nil, &got); c != 200 {
+			t.Fatalf("get harness config: %d", c)
+		}
+		return got
+	}
+	if got := defaults(e); got == nil || len(got) != 0 {
+		t.Fatalf("initial harness config: %v", got)
+	}
+	if c := e.do("GET", "/v1/harnesses/nope/config", nil, nil); c != 404 {
+		t.Errorf("get unknown harness: %d", c)
+	}
+	if c := e.do("PATCH", "/v1/harnesses/nope/config", map[string]string{"thinking": "low"}, nil); c != 404 {
+		t.Errorf("patch unknown harness: %d", c)
+	}
+	var got map[string]string
+	e.do("PATCH", "/v1/harnesses/fake/config", map[string]string{"model": "smart"}, nil)
+	if c := e.do("PATCH", "/v1/harnesses/fake/config", map[string]string{"thinking": "medium"}, &got); c != 200 ||
+		!maps.Equal(got, map[string]string{"model": "smart", "thinking": "medium"}) {
+		t.Fatalf("patch harness config: %d %v", c, got)
+	}
+
+	// Kept across a restart.
+	e.m.StopAll()
+	e = newTestEnv(t, stateDir)
+	if got := defaults(e); !maps.Equal(got, map[string]string{"model": "smart", "thinking": "medium"}) {
+		t.Fatalf("harness config after restart: %v", got)
+	}
+
+	// Applied to new agents; POST values win per key.
+	agentConfig := func(config map[string]any) map[string]string {
+		var a agentView
+		if c := e.do("POST", "/v1/agents", map[string]any{"harness": "fake", "cwd": "repo", "config": config}, &a); c != 201 {
+			t.Fatalf("create %v: %d %+v", config, c, a)
+		}
+		got := map[string]string{}
+		for _, o := range a.Config {
+			got[o.ID] = string(o.Value)
+		}
+		return got
+	}
+	if got := agentConfig(nil); !maps.Equal(got, map[string]string{"model": `"smart"`, "thinking": `"medium"`}) {
+		t.Errorf("agent with defaults: %v", got)
+	}
+	if got := agentConfig(map[string]any{"thinking": "low"}); !maps.Equal(got, map[string]string{"model": `"smart"`, "thinking": `"low"`}) {
+		t.Errorf("agent with POST thinking: %v", got)
+	}
+
+	// null removes a key; the harness's own value is used again.
+	got = nil
+	if c := e.do("PATCH", "/v1/harnesses/fake/config", map[string]any{"model": nil}, &got); c != 200 ||
+		!maps.Equal(got, map[string]string{"thinking": "medium"}) {
+		t.Fatalf("remove model: %d %v", c, got)
+	}
+	if got := agentConfig(nil); !maps.Equal(got, map[string]string{"model": `"fast"`, "thinking": `"medium"`}) {
+		t.Errorf("agent after removing model: %v", got)
 	}
 }
