@@ -39,6 +39,8 @@ func (s *server) routes() http.Handler {
 		})
 	}
 	h("GET /v1/harnesses", s.harnesses)
+	h("GET /v1/harnesses/{name}/config", s.getHarnessConfig)
+	h("PATCH /v1/harnesses/{name}/config", s.patchHarnessConfig)
 	h("POST /v1/agents", s.createAgent)
 	h("GET /v1/agents", s.listAgents)
 	h("GET /v1/agents/{id}", s.getAgent)
@@ -99,6 +101,40 @@ func (s *server) harnesses(w http.ResponseWriter, r *http.Request) error {
 		out[i] = map[string]string{"name": n}
 	}
 	writeJSON(w, 200, out)
+	return nil
+}
+
+func (s *server) harnessName(r *http.Request) (string, error) {
+	name := r.PathValue("name")
+	if _, ok := s.m.cfg.Harnesses[name]; !ok {
+		return "", errf(404, "unknown harness %q", name)
+	}
+	return name, nil
+}
+
+func (s *server) getHarnessConfig(w http.ResponseWriter, r *http.Request) error {
+	name, err := s.harnessName(r)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, s.m.HarnessConfig(name))
+	return nil
+}
+
+func (s *server) patchHarnessConfig(w http.ResponseWriter, r *http.Request) error {
+	name, err := s.harnessName(r)
+	if err != nil {
+		return err
+	}
+	var values map[string]json.RawMessage
+	if err := readJSON(r, &values); err != nil {
+		return err
+	}
+	c, err := s.m.SetHarnessConfig(name, values)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, c)
 	return nil
 }
 
