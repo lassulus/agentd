@@ -75,30 +75,39 @@ async function refreshList() {
 
 // --- one agent ---------------------------------------------------------------
 
-let cur = null, curKind = "", tools = {}, permTimer = null;
+// The transcript opens with the newest PAGE items of agentd's compacted
+// history, then follows the raw events live. Scrolling to the top prepends
+// the page before. Live events are queued and rendered once per frame.
+const PAGE = 100;
+let tools = {}, permTimer = null, queue = [], frame = 0;
 
-function block(cls, text) {
-  const near = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 50;
+// A sink is where render appends: its parent (#log, or a fragment for an
+// earlier page), the message block that text chunks of the same kind
+// continue, and whether its events are live (they update state, config and
+// pending permissions) or older than those shown (they keep later tool
+// calls of the same id).
+function sink(parent, live, older) { return { parent, cur: null, curKind: "", live, older }; }
+
+function block(s, cls, text) {
   const d = el("div", text, cls);
-  logEl.append(d);
-  cur = null; curKind = "";
-  if (near) logEl.scrollTop = logEl.scrollHeight;
+  s.parent.append(d);
+  s.cur = null; s.curKind = "";
   return d;
 }
 
 // A tool call is a collapsed <details>: the summary shows title and
 // status, expanding it shows the call's content (command output, diffs).
 // Each update's content replaces the previous one (ACP).
-function newTool(id) {
-  const d = block("tool", "");
-  d.replaceChildren(el("details"));
-  const det = d.firstChild;
+function newTool(s, id) {
+  const det = el("details");
   det.append(el("summary"), el("pre"));
-  tools[id] = { el: det, title: "", status: "" };
+  block(s, "tool", "").append(det);
+  const t = { el: det, title: "", status: "" };
+  if (!s.older || !tools[id]) tools[id] = t;
+  return t;
 }
 
-function setTool(u) {
-  const t = tools[u.toolCallId];
+function setTool(t, u) {
   if (!t) return;
   if (u.title) t.title = u.title;
   if (u.status) t.status = u.status;
@@ -111,9 +120,14 @@ function setTool(u) {
   }
 }
 
-function render(ev) {
+function setState(state) {
+  $("#state").textContent = state;
+  $("#state").className = "state " + state;
+}
+
+function render(s, ev) {
   switch (ev.type) {
-    case "user_message": block("user", `${ev.by}: ${ev.text}`); break;
+    case "user_message": block(s, "user", `${ev.by}: ${ev.text}`); break;
     case "acp": {
       const u = ev.update || {};
       switch (u.sessionUpdate) {
@@ -121,47 +135,87 @@ function render(ev) {
         case "agent_thought_chunk": {
           if (u.content?.type !== "text") break;
           const kind = u.sessionUpdate === "agent_message_chunk" ? "agent" : "thought";
-          if (curKind !== kind) { const d = block(kind, ""); cur = d; curKind = kind; }
-          cur.textContent += u.content.text;
-          if (logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 200) logEl.scrollTop = logEl.scrollHeight;
+          if (s.curKind !== kind) { s.cur = block(s, kind, ""); s.curKind = kind; }
+          s.cur.textContent += u.content.text;
           break;
         }
-        case "tool_call":
-          newTool(u.toolCallId);
-          setTool(u);
-          break;
-        case "tool_call_update": setTool(u); break;
+        case "tool_call": setTool(newTool(s, u.toolCallId), u); break;
+        // In an earlier page an update belongs to no tool call shown.
+        case "tool_call_update": if (!s.older) setTool(tools[u.toolCallId], u); break;
         case "plan":
-          block("event", "plan:\n" + (u.entries || []).map((e) => `[${e.status}] ${e.content}`).join("\n"));
+          block(s, "event", "plan:\n" + (u.entries || []).map((e) => `[${e.status}] ${e.content}`).join("\n"));
           break;
       }
       break;
     }
     case "permission_request":
-      block("event", `permission ${ev.id}: ${ev.tool_call?.title || ""}`); schedulePerms(); break;
+      block(s, "event", `permission ${ev.id}: ${ev.tool_call?.title || ""}`); if (s.live) schedulePerms(); break;
     case "question":
-      block("event", `question ${ev.id}: ${ev.request?.message || ""}`); schedulePerms(); break;
+      block(s, "event", `question ${ev.id}: ${ev.request?.message || ""}`); if (s.live) schedulePerms(); break;
     case "permission_resolved":
-      block("event", `${ev.by || "agentd"} answered ${ev.id}: ${ev.error || ev.option}`); schedulePerms(); break;
+      block(s, "event", `${ev.by || "agentd"} answered ${ev.id}: ${ev.error || ev.option}`); if (s.live) schedulePerms(); break;
     case "turn_end":
-      block("event", ev.error ? `turn failed: ${ev.error}` : `turn ended${ev.stop_reason ? ` (${ev.stop_reason})` : ""}`);
+      block(s, "event", ev.error ? `turn failed: ${ev.error}` : `turn ended${ev.stop_reason ? ` (${ev.stop_reason})` : ""}`);
       break;
     case "config_changed":
-      block("event", `${ev.by} set ${JSON.stringify(ev.values)}`);
-      if (current) loadConfig(current.backend, current.id);
+      block(s, "event", `${ev.by} set ${JSON.stringify(ev.values)}`);
+      if (s.live && current) loadConfig(current.backend, current.id);
       break;
     case "state":
-      $("#state").textContent = ev.state;
-      $("#state").className = "state " + ev.state;
-      if (ev.state === "error") block("event", `error: ${ev.error}`);
+      if (s.live) setState(ev.state);
+      if (ev.state === "error") block(s, "event", `error: ${ev.error}`);
       break;
   }
 }
 
+// Setting scrollTop beyond the end scrolls to the end, without reading
+// the layout.
+function scrollToEnd() { logEl.scrollTop = 1e9; }
+
+// flush renders the queued live events: one layout read before, one
+// scroll after, and only if the view was at the bottom.
+function flush() {
+  frame = 0;
+  const evs = queue;
+  queue = [];
+  if (!current?.live) return;
+  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 50;
+  for (const ev of evs) render(current.live, ev);
+  if (atBottom) scrollToEnd();
+}
+
+// history fetches a page of agentd's compacted history.
+function history(c, before) {
+  return api(c.backend, `/v1/agents/${c.id}/history?compact=1&limit=${PAGE}${before ? `&before=${before}` : ""}`);
+}
+
+// loadEarlier prepends the page before the oldest item shown; what is on
+// screen stays where it is.
+async function loadEarlier() {
+  const c = current;
+  if (!c?.before || c.loading) return;
+  c.loading = true;
+  const s = sink(document.createDocumentFragment(), false, true);
+  let before = 0;
+  try {
+    const h = await history(c, c.before);
+    for (const ev of h.events) render(s, ev);
+    before = h.before;
+  } catch (e) { block(s, "event", e.message); }
+  c.loading = false;
+  if (current !== c) return;
+  const height = logEl.scrollHeight;
+  logEl.prepend(s.parent);
+  logEl.scrollTop += logEl.scrollHeight - height;
+  c.before = before;
+  if (logEl.scrollTop < 200) loadEarlier();
+}
+logEl.onscroll = () => { if (logEl.scrollTop < 200) loadEarlier(); };
+
 async function open(backend, id) {
   current?.es?.close();
   logEl.replaceChildren(); pendingEl.replaceChildren();
-  cur = null; curKind = ""; tools = {};
+  tools = {}; queue = [];
   $("#new").hidden = true;
   $("#send").hidden = false;
   const h = $("#header");
@@ -171,17 +225,37 @@ async function open(backend, id) {
   cfg.id = "config";
   h.replaceChildren(title, " ", el("span", "", "state"), info, cfg);
   h.querySelector(".state").id = "state";
-  const es = new EventSource(`/api/b/${encodeURIComponent(backend)}/v1/agents/${id}/events?since=0`);
-  es.onmessage = (m) => render(JSON.parse(m.data));
-  es.onerror = () => { if (es.readyState === EventSource.CLOSED) checkSession(); };
-  current = { backend, id, es };
+  // live: the sink of live events once the newest page is shown;
+  // before: the cursor of the page before the oldest shown (0: none).
+  const c = current = { backend, id, es: null, live: null, before: 0, loading: false };
   refreshList();
-  try {
-    const a = await api(backend, `/v1/agents/${id}`);
+  loadPerms();
+  api(backend, `/v1/agents/${id}`).then((a) => {
     title.textContent = a.name || id;
     info.textContent = `${backend} · ${a.harness} · ${a.cwd} · ${a.owner}`;
     showConfig(backend, id, a.config || []);
-  } catch (e) { info.textContent = e.message; }
+  }).catch((e) => { info.textContent = e.message; });
+
+  let page;
+  try { page = await history(c); }
+  catch (e) { if (current === c) info.textContent = e.message; return; }
+  if (current !== c) return;
+  setState(page.state);
+  const s = sink(logEl, false, false);
+  for (const ev of page.events) render(s, ev);
+  s.live = true;
+  c.live = s;
+  c.before = page.before;
+  scrollToEnd();
+  // Live events continue right after the page.
+  const es = c.es = new EventSource(`/api/b/${encodeURIComponent(backend)}/v1/agents/${id}/events?since=${page.next}`);
+  es.onmessage = (m) => {
+    if (current !== c) return;
+    queue.push(JSON.parse(m.data));
+    frame ||= requestAnimationFrame(flush);
+  };
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED) checkSession(); };
+  if (logEl.scrollTop < 200) loadEarlier();
 }
 
 // showConfig renders the harness's config options (model, effort, mode, …)
