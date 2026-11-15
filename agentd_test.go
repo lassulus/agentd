@@ -53,6 +53,10 @@ func fakeAgent() {
 		_ = conn().Notify("session/update", map[string]any{"sessionId": sid, "update": map[string]any{
 			"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": text}}})
 	}
+	update := func(sid string, u map[string]any) {
+		_ = conn().Notify("session/update", map[string]any{"sessionId": sid, "update": u})
+	}
+	textBlock := func(s string) map[string]string { return map[string]string{"type": "text", "text": s} }
 	handler := func(method string, params json.RawMessage) (any, *rpcError) {
 		fmt.Fprintln(logf, method)
 		var p struct {
@@ -108,6 +112,18 @@ func fakeAgent() {
 				return map[string]string{"stopReason": "cancelled"}, nil
 			case strings.Contains(text, "slow"):
 				time.Sleep(300 * time.Millisecond)
+			case strings.Contains(text, "tool"):
+				// Thinks in two chunks, then runs a tool call with two updates.
+				id := "tc-" + text
+				for _, s := range []string{"hm", "m"} {
+					update(p.SessionID, map[string]any{"sessionUpdate": "agent_thought_chunk", "content": textBlock(s)})
+				}
+				update(p.SessionID, map[string]any{"sessionUpdate": "tool_call", "toolCallId": id, "title": "run", "status": "pending",
+					"content": []any{map[string]any{"type": "content", "content": textBlock("$ run")}}})
+				update(p.SessionID, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "in_progress",
+					"content": []any{map[string]any{"type": "content", "content": textBlock("output")}}, "rawOutput": "output"})
+				update(p.SessionID, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed",
+					"title": nil, "rawOutput": map[string]string{"stdout": "output"}})
 			}
 			say(p.SessionID, "echo: "+text)
 			say(p.SessionID, "!")

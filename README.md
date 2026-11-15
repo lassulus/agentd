@@ -23,6 +23,7 @@ POST   /v1/agents/{id}/messages               {"text"}; queued while a turn runs
 POST   /v1/agents/{id}/cancel                 end the turn, drop queued messages
 GET    /v1/agents/{id}/history?since=&wait=&limit=   events with seq > since; wait=N long-polls
 GET    /v1/agents/{id}/events?since=          the same events as SSE (Last-Event-ID resumes)
+GET    /v1/agents/{id}/history?compact=1&limit=&before=   merged for display: the last limit items (before a cursor)
 GET    /v1/agents/{id}/transcript?last=20     markdown view
 GET    /v1/agents/{id}/config                 model, effort, mode, … as the harness offers them
 PATCH  /v1/agents/{id}/config                 {"model":"sonnet","effort":"high"}
@@ -41,6 +42,16 @@ POST   /v1/agents/{id}/permissions/{req}      {"option":"allow-once"} or, for qu
 - History events: `user_message`, `acp` (the agent's `session/update`,
   unchanged), `permission_request`, `question`, `permission_resolved`,
   `config_changed`, `turn_end`, `state`.
+- `history?compact=1` merges the history for display: consecutive
+  `agent_message_chunk` (or `agent_thought_chunk`) text chunks become one
+  chunk, and a `tool_call` takes in all its later `tool_call_update`s
+  (later fields win, `content` is replaced). `rawOutput` is left out of
+  compacted items. An item's `seq` is that of the last event merged into
+  it. The response has `next`, the history's last seq: `events?since=next`
+  continues live with the raw events. `before` in the response is the
+  cursor for the items before the page (`0`: none); pass it as `before=`
+  for the next page back. Without `compact=1`, `history` and `events`
+  return the raw events.
 - A stopped agent (also after an agentd restart) is resumed with ACP
   `session/resume`, or `session/load` if that is all the harness offers.
 - For each `notify` entry, agentd POSTs `{"type","agent","event","text"}`

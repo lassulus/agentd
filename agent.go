@@ -85,6 +85,9 @@ type Agent struct {
 	logf    *os.File
 	changed chan struct{} // closed and replaced on every new event
 
+	compactMu sync.Mutex // guards compact; taken before mu
+	compact   compactor  // the compacted history, filled on demand
+
 	cmd       *exec.Cmd
 	conn      *rpcConn
 	exited    chan struct{}

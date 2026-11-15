@@ -242,6 +242,9 @@ func (s *server) history(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if r.URL.Query().Get("compact") == "1" {
+		return s.historyCompact(w, r, a, int(limit))
+	}
 	deadline := time.After(time.Duration(wait) * time.Second)
 	for {
 		a.mu.Lock()
@@ -266,6 +269,34 @@ func (s *server) history(w http.ResponseWriter, r *http.Request) error {
 			return nil
 		}
 	}
+}
+
+// historyCompact answers history?compact=1: the last limit compacted items
+// that start before seq before (default: the newest ones). before in the
+// response is the cursor for the page before them (0: none), next the
+// last seq of the history, to continue with events?since=next.
+func (s *server) historyCompact(w http.ResponseWriter, r *http.Request, a *Agent, limit int) error {
+	q := r.URL.Query()
+	if q.Has("since") || q.Has("wait") {
+		return errf(400, "compact=1 takes limit and before, not since or wait")
+	}
+	before, err := intParam(r, "before", 0)
+	if err != nil {
+		return err
+	}
+	a.compactMu.Lock()
+	a.mu.Lock()
+	evs := a.events[a.compact.n:len(a.events):len(a.events)] // append-only: safe to read unlocked
+	state := a.stateLocked()
+	a.mu.Unlock()
+	for _, e := range evs {
+		a.compact.add(e)
+	}
+	items, prev := a.compact.page(before, limit)
+	next := a.compact.n
+	a.compactMu.Unlock()
+	writeJSON(w, 200, map[string]any{"events": items, "next": next, "before": prev, "state": state})
+	return nil
 }
 
 // events streams the history as server-sent events, starting after since
